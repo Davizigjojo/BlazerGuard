@@ -1,111 +1,42 @@
+import os
+import asyncio
+import websockets
 import json
-import re
-from fastapi import FastAPI
-from pydantic import BaseModel
-import onnxruntime as ort
-import numpy as np
-from huggingface_hub import hf_hub_download
+import requests
 
-app = FastAPI()
+# URL da tua IA na Hugging Face
+IA_URL = "https://davizig10jojo-ia.hf.space/perguntar_mc"
 
-MODEL_REPO = "Davizig10jojo/BlazerGuard-pt-BR"
+async def handler(websocket):
+    print("Cliente (Minecraft) conectado ao Bridge!")
+    try:
+        async for message in websocket:
+            dados = json.loads(message)
+            pergunta = dados.get("texto", "")
+            
+            # Envia para a Hugging Face
+            try:
+                response = requests.post(IA_URL, json={"texto": pergunta})
+                if response.status_code == 200:
+                    resposta_ia = response.json().get("resposta", "Sem resposta da IA.")
+                else:
+                    resposta_ia = "Erro temporário no servidor da IA."
+            except Exception:
+                resposta_ia = "Erro de conexão com o modelo de IA."
+            
+            # Envia a resposta de volta para o Minecraft
+            await websocket.send(json.dumps({"resposta": resposta_ia}))
+            
+    except websockets.exceptions.ConnectionClosed:
+        print("Cliente desconectado.")
 
-print("Baixando modelo ONNX e configurações do Tokenizer...")
-onnx_path = hf_hub_download(repo_id=MODEL_REPO, filename="onnx/model.onnx")
-vocab_path = hf_hub_download(repo_id=MODEL_REPO, filename="vocab.txt")
-tokenizer_config_path = hf_hub_download(repo_id=MODEL_REPO, filename="tokenizer_config.json")
+async def main():
+    # A Render fornece a porta automaticamente pela variável de ambiente PORT
+    port = int(os.environ.get("PORT", 8080))
+    # '0.0.0.0' escuta em todas as interfaces públicas da nuvem
+    async with websockets.serve(handler, "0.0.0.0", port):
+        print(f"Bridge a correr na porta {port}...")
+        await asyncio.Future()  # Mantém o servidor ligado continuamente
 
-# Carrega o vocabulário em memória (apenas um dicionário leve em Python)
-vocab = {}
-with open(vocab_path, "r", encoding="utf-8") as f:
-    for index, line in enumerate(f):
-        vocab[line.strip()] = index
-
-# Configura as opções do ONNX Runtime para economizar memória máxima
-session_options = ort.SessionOptions()
-session_options.enable_cpu_mem_arena = False
-session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-
-session = ort.InferenceSession(onnx_path, session_options, providers=["CPUExecutionProvider"])
-
-def basic_tokenizer(text: str, max_length: int = 128):
-    """
-    Tokenizer minimalista estilo WordPiece (consome 0 MB adicionais de RAM).
-    """
-    text = text.lower().strip()
-    tokens = ["[CLS]"]
-    
-    # Separa palavras e pontuações
-    words = re.findall(r"\w+|[^\w\s]", text, re.UNICODE)
-    
-    for word in words:
-        if word in vocab:
-            tokens.append(word)
-        else:
-            # Subpalavras (WordPiece básico)
-            i = 0
-            while i < len(word):
-                j = len(word)
-                cur_substr = None
-                while j > i:
-                    substr = word[i:j]
-                    if i > 0:
-                        substr = "##" + substr
-                    if substr in vocab:
-                        cur_substr = substr
-                        break
-                    j -= 1
-                if cur_substr is None:
-                    tokens.append("[UNK]")
-                    break
-                tokens.append(cur_substr)
-                i = j
-
-    tokens = tokens[:max_length - 1] + ["[SEP]"]
-    
-    input_ids = [vocab.get(token, vocab.get("[UNK]", 100)) for token in tokens]
-    attention_mask = [1] * len(input_ids)
-    
-    # Preenchimento (Padding)
-    padding_length = max_length - len(input_ids)
-    input_ids += [vocab.get("[PAD]", 0)] * padding_length
-    attention_mask += [0] * padding_length
-    
-    return np.array([input_ids], dtype=np.int64), np.array([attention_mask], dtype=np.int64)
-
-class TextRequest(BaseModel):
-    text: str
-
-@app.get("/")
-def home():
-    return {"status": "API de Moderação ONNX Ultra-Leve Online"}
-
-@app.post("/predict")
-def predict(data: TextRequest):
-    if not data.text.strip():
-        return {"level": "safe", "score": 0.0}
-
-    input_ids, attention_mask = basic_tokenizer(data.text)
-    
-    onnx_inputs = {
-        session.get_inputs()[0].name: input_ids,
-        session.get_inputs()[1].name: attention_mask
-    }
-
-    outputs = session.run(None, onnx_inputs)
-    logits = outputs[0]
-
-    # Softmax leve
-    exp_logits = np.exp(logits - np.max(logits, axis=-1, keepdims=True))
-    probs = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
-    
-    toxic_score = float(probs[0][1])
-
-    if toxic_score >= 0.85:
-        level = "unsafe"
-    elif toxic_score >= 0.50:
-        level = "controversial"
-    else:
-        level = "safe"
-
-    return {"level": level, "score": round(toxic_score, 4)}
+if __name__ == "__main__":
+    asyncio.run(main())
