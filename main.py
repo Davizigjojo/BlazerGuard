@@ -4,39 +4,58 @@ import websockets
 import json
 import requests
 
-# URL da tua IA na Hugging Face
 IA_URL = "https://davizig10jojo-ia.hf.space/perguntar_mc"
 
 async def handler(websocket):
-    print("Cliente (Minecraft) conectado ao Bridge!")
+    print("Minecraft conectado com sucesso ao Bridge WebSocket!")
     try:
         async for message in websocket:
-            dados = json.loads(message)
-            pergunta = dados.get("texto", "")
+            print(f"Mensagem recebida do jogo: {message}")
+            pergunta = message
             
-            # Envia para a Hugging Face
+            # Tenta extrair JSON caso o Minecraft envie estruturado
             try:
-                response = requests.post(IA_URL, json={"texto": pergunta})
+                dados = json.loads(message)
+                if isinstance(dados, dict):
+                    pergunta = dados.get("body", {}).get("message", dados.get("texto", message))
+            except:
+                pass
+            
+            # Envia para a IA da Hugging Face
+            try:
+                response = requests.post(IA_URL, json={"texto": str(pergunta)}, timeout=15)
                 if response.status_code == 200:
                     resposta_ia = response.json().get("resposta", "Sem resposta da IA.")
                 else:
                     resposta_ia = "Erro temporário no servidor da IA."
-            except Exception:
+            except Exception as e:
+                print(f"Erro ao contactar a IA: {e}")
                 resposta_ia = "Erro de conexão com o modelo de IA."
             
-            # Envia a resposta de volta para o Minecraft
-            await websocket.send(json.dumps({"resposta": resposta_ia}))
+            # Resposta formatada de volta para o jogo
+            resposta_json = json.dumps({
+                "body": {
+                    "statusMessage": f"§5[BlazerIA] §f{resposta_ia}"
+                },
+                "header": {
+                    "requestId": "00000000-0000-0000-0000-000000000000",
+                    "messagePurpose": "commandResponse",
+                    "version": 1,
+                    "messageType": "commandResponse"
+                }
+            })
+            
+            await websocket.send(resposta_json)
             
     except websockets.exceptions.ConnectionClosed:
-        print("Cliente desconectado.")
+        print("Conexão WebSocket fechada pelo cliente.")
 
 async def main():
-    # A Render fornece a porta automaticamente pela variável de ambiente PORT
-    port = int(os.environ.get("PORT", 8080))
-    # '0.0.0.0' escuta em todas as interfaces públicas da nuvem
-    async with websockets.serve(handler, "0.0.0.0", port):
-        print(f"Bridge a correr na porta {port}...")
-        await asyncio.Future()  # Mantém o servidor ligado continuamente
+    port = int(os.environ.get("PORT", 10000))
+    # '0.0.0.0' permite conexões externas públicas
+    async with websockets.serve(handler, "0.0.0.0", port, ping_interval=None):
+        print(f"Servidor WebSocket ativo e a escuta na porta {port}...")
+        await asyncio.Future()
 
 if __name__ == "__main__":
     asyncio.run(main())
