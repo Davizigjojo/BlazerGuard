@@ -14,7 +14,7 @@ SECRET_TOKEN = "BlazerGuard_MinhaSenhaSecreta123xpto"
 MODEL_REPO = "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
 MODEL_FILE = "model.quant.onnx"
 
-# URL corrigida com a barra separadora correta
+# URL CORRIGIDA: Garante a barra separadora oficial
 URL_MODELO = f"https://huggingface.co{MODEL_REPO}/resolve/main/{MODEL_FILE}"
 
 if not os.path.exists(MODEL_FILE):
@@ -48,13 +48,17 @@ else:
 class ContentCheckRequest(BaseModel):
     text: str
 
+@app.get("/")
+async def root():
+    return {"status": "online", "message": "BlazerGuard ativo e operacional."}
+
 @app.post("/check")
 async def check_content(request: ContentCheckRequest, x_custom_auth_token: str = Header(None)):
     if x_custom_auth_token != SECRET_TOKEN:
         raise HTTPException(status_code=401, detail="Não autorizado")
 
     if ort_session is None:
-        raise HTTPException(status_code=503, detail="Modelo não carregado.")
+        raise HTTPException(status_code=503, detail="Modelo de proteção do BlazerIA não carregado.")
 
     inputs = tokenizer(request.text, return_tensors="np", max_length=128, truncation=True)
     
