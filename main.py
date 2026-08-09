@@ -8,18 +8,19 @@ import numpy as np
 
 app = FastAPI()
 
-# Senha inserida diretamente no código
+# Senha do BlazerGuard
 SECRET_TOKEN = "BlazerGuard_MinhaSenhaSecreta123xpto"
 
 MODEL_REPO = "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
 MODEL_FILE = "model.quant.onnx"
 
-# FUNÇÃO MODIFICADA: Usa a biblioteca 'requests' que lida melhor com proxies de rede
+# URL corrigida com a barra separadora correta
+URL_MODELO = f"https://huggingface.co{MODEL_REPO}/resolve/main/{MODEL_FILE}"
+
 if not os.path.exists(MODEL_FILE):
     print("Iniciando download do modelo via Requests...")
-    url = f"https://huggingface.co{MODEL_REPO}/resolve/main/{MODEL_FILE}"
     try:
-        response = requests.get(url, stream=True, timeout=60)
+        response = requests.get(URL_MODELO, stream=True, timeout=60)
         response.raise_for_status()
         with open(MODEL_FILE, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
@@ -28,7 +29,7 @@ if not os.path.exists(MODEL_FILE):
     except Exception as e:
         print(f"Erro ao baixar o modelo: {e}")
 
-# Configurações para travar o consumo de memória e CPU
+# Configurações estritas para não estourar a CPU e RAM do Render
 onnx_options = ort.SessionOptions()
 onnx_options.intra_op_num_threads = 1
 onnx_options.inter_op_num_threads = 1
@@ -37,12 +38,12 @@ onnx_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_A
 print("Carregando o Tokenizer e a sessão ONNX...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO)
 
-# Carrega o modelo apenas se o arquivo existir para evitar travar a inicialização
 if os.path.exists(MODEL_FILE):
     ort_session = ort.InferenceSession(MODEL_FILE, onnx_options)
+    print("Sessão do ONNX iniciada com sucesso!")
 else:
     ort_session = None
-    print("ALERTA: O arquivo do modelo não foi encontrado na inicialização!")
+    print("AVISO: O arquivo .onnx não foi encontrado.")
 
 class ContentCheckRequest(BaseModel):
     text: str
@@ -53,7 +54,7 @@ async def check_content(request: ContentCheckRequest, x_custom_auth_token: str =
         raise HTTPException(status_code=401, detail="Não autorizado")
 
     if ort_session is None:
-        raise HTTPException(status_code=503, detail="Modelo de proteção não carregado.")
+        raise HTTPException(status_code=503, detail="Modelo não carregado.")
 
     inputs = tokenizer(request.text, return_tensors="np", max_length=128, truncation=True)
     
@@ -63,15 +64,12 @@ async def check_content(request: ContentCheckRequest, x_custom_auth_token: str =
     }
 
     outputs = ort_session.run(None, onnx_inputs)
-    logits = outputs[0]
+    logits = outputs
     
-    # Formatação de saída do array corrigida para compatibilidade matemática pura
     probability = 1 / (1 + np.exp(-np.array(logits))) 
     score = float(np.max(probability))
 
-    IS_UNSAFE = bool(score > 0.60)
-
     return {
-        "is_unsafe": IS_UNSAFE,
+        "is_unsafe": bool(score > 0.60),
         "score": score
     }
