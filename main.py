@@ -53,8 +53,9 @@ async def check_content(request: ContentCheckRequest, x_custom_auth_token: str =
     logits = outputs
     
     # Transforma o resultado em uma probabilidade de 0.0 a 1.0
-    probability = 1 / (1 + np.exp(-logits)) 
-    
+    # Altere apenas a linha do cálculo da probabilidade para garantir compatibilidade
+    probability = 1 / (1 + np.exp(-np.array(logits)))
+ 
     # Se passar de 60% de certeza que é um ataque ou comando malicioso, bloqueia
     IS_UNSAFE = bool(probability > 0.60)
 
