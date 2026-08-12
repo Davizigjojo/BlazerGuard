@@ -14,13 +14,13 @@ SECRET_TOKEN = "BlazerGuard_MinhaSenhaSecreta123xpto"
 MODEL_REPO = "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
 MODEL_FILE = "model.quant.onnx"
 
-# URL CORRIGIDA: Garante a barra separadora oficial
-URL_MODELO = f"https://huggingface.co{MODEL_REPO}/resolve/main/{MODEL_FILE}"
+# URL CORRIGIDA: Adicionada a barra '/' após .co
+URL_MODELO = f"https://huggingface.co/{MODEL_REPO}/resolve/main/{MODEL_FILE}"
 
 if not os.path.exists(MODEL_FILE):
     print("Iniciando download do modelo via Requests...")
     try:
-        response = requests.get(URL_MODELO, stream=True, timeout=60)
+        response = requests.get(URL_MODELO, stream=True, timeout=120)
         response.raise_for_status()
         with open(MODEL_FILE, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
@@ -29,7 +29,7 @@ if not os.path.exists(MODEL_FILE):
     except Exception as e:
         print(f"Erro ao baixar o modelo: {e}")
 
-# Configurações estritas para não estourar a CPU e RAM do Render
+# Configurações para otimização em instâncias com recursos limitados (Render)
 onnx_options = ort.SessionOptions()
 onnx_options.intra_op_num_threads = 1
 onnx_options.inter_op_num_threads = 1
@@ -68,7 +68,7 @@ async def check_content(request: ContentCheckRequest, x_custom_auth_token: str =
     }
 
     outputs = ort_session.run(None, onnx_inputs)
-    logits = outputs
+    logits = outputs[0]
     
     probability = 1 / (1 + np.exp(-np.array(logits))) 
     score = float(np.max(probability))
@@ -77,3 +77,9 @@ async def check_content(request: ContentCheckRequest, x_custom_auth_token: str =
         "is_unsafe": bool(score > 0.60),
         "score": score
     }
+
+# Bloco de execução com suporte à porta dinâmica do Render
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
