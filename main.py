@@ -1,10 +1,16 @@
 import os
-import requests
+import gc
+import numpy as np
+
+# Configurações de ambiente para reduzir o footprint de memória RAM do Hugging Face
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
+from huggingface_hub import hf_hub_download
 from transformers import AutoTokenizer
 import onnxruntime as ort
-import numpy as np
 
 app = FastAPI()
 
@@ -14,36 +20,35 @@ SECRET_TOKEN = "BlazerGuard_MinhaSenhaSecreta123xpto"
 MODEL_REPO = "gravitee-io/Llama-Prompt-Guard-2-86M-onnx"
 MODEL_FILE = "model.quant.onnx"
 
-# URL CORRIGIDA: Adicionada a barra '/' após .co
-URL_MODELO = f"https://huggingface.co/{MODEL_REPO}/resolve/main/{MODEL_FILE}"
+# Download otimizado do modelo direto do HF Hub para economizar RAM
+try:
+    print("Baixando/Verificando o arquivo .onnx via huggingface_hub...")
+    model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILE)
+    print(f"Modelo carregado no caminho: {model_path}")
+except Exception as e:
+    print(f"Erro ao baixar modelo do HF Hub: {e}")
+    model_path = None
 
-if not os.path.exists(MODEL_FILE):
-    print("Iniciando download do modelo via Requests...")
-    try:
-        response = requests.get(URL_MODELO, stream=True, timeout=120)
-        response.raise_for_status()
-        with open(MODEL_FILE, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print("Download concluído com sucesso!")
-    except Exception as e:
-        print(f"Erro ao baixar o modelo: {e}")
-
-# Configurações para otimização em instâncias com recursos limitados (Render)
+# Configurações estritas do ONNX Runtime para Render Free (1 vCPU, 512MB RAM)
 onnx_options = ort.SessionOptions()
 onnx_options.intra_op_num_threads = 1
 onnx_options.inter_op_num_threads = 1
-onnx_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL 
+onnx_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+onnx_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
 
-print("Carregando o Tokenizer e a sessão ONNX...")
+print("Carregando Tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO)
 
-if os.path.exists(MODEL_FILE):
-    ort_session = ort.InferenceSession(MODEL_FILE, onnx_options)
-    print("Sessão do ONNX iniciada com sucesso!")
+if model_path and os.path.exists(model_path):
+    print("Carregando Sessão ONNX Runtime...")
+    ort_session = ort.InferenceSession(model_path, onnx_options)
+    print("Sessão ONNX iniciada com sucesso!")
 else:
     ort_session = None
-    print("AVISO: O arquivo .onnx não foi encontrado.")
+    print("AVISO: Modelo ONNX não pôde ser carregado.")
+
+# Força a liberação de memória acumulada durante o boot
+gc.collect()
 
 class ContentCheckRequest(BaseModel):
     text: str
@@ -78,8 +83,8 @@ async def check_content(request: ContentCheckRequest, x_custom_auth_token: str =
         "score": score
     }
 
-# Bloco de execução com suporte à porta dinâmica do Render
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
+    
